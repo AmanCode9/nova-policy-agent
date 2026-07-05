@@ -176,13 +176,6 @@ Metrics tracked per query:
 
 ---
 
-## Roadmap
-
-- [ ] Expand evaluation coverage across all five policy documents
-- [ ] Wire MCP tool servers directly into the LangGraph pipeline (currently validated independently)
-- [ ] Add lightweight API-key auth to backend endpoints
-- [ ] Structured logging in place of `print()` statements
-- [ ] Deploy backend + frontend to a public environment
 
 ---
 
