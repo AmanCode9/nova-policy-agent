@@ -1,0 +1,15 @@
+langgraph==0.2.60
+langchain-google-genai==2.0.7
+langchain-core==0.3.29
+google-genai==0.3.0
+fastapi==0.115.6
+uvicorn==0.34.0
+pydantic==2.10.4
+boto3==1.35.90
+python-dotenv==1.0.1
+requests==2.32.3
+mcp==1.2.0
+pypdf==5.1.0
+python-multipart==0.0.20
+deepeval==4.0.7
+pytest==8.3.4

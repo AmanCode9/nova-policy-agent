@@ -1,0 +1,24 @@
+# Environment variables — never commit these
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+
+# Node / React
+node_modules/
+build/
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Cache / local data
+cache.json
