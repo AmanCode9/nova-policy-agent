@@ -12,10 +12,18 @@ WHAT CHANGED FROM THE LOCAL VERSION:
 """
 
 import os
+import logging
 import boto3
 from botocore.exceptions import ClientError
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+logger = logging.getLogger(__name__)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
 
 # ── Path configuration & Environment ─────────────────────────────────────────
 BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
@@ -47,15 +55,15 @@ def get_all_md_files() -> list:
         # Paginator ensures we get all files even if there are > 1,000 in the bucket
         paginator = s3_client.get_paginator('list_objects_v2')
         pages = paginator.paginate(Bucket=BUCKET_NAME)
-        
+
         for page in pages:
             if "Contents" in page:
                 for obj in page["Contents"]:
                     if obj["Key"].lower().endswith(".md"):
                         md_files.append(obj["Key"])
         return md_files
-    except ClientError as e:
-        print(f"[md_reader] R2 list_objects_v2 error: {e}")
+    except ClientError:
+        logger.exception("R2 list_objects_v2 error")
         return []
 
 
@@ -74,7 +82,7 @@ def get_file_content(filename: str) -> str:
         error_code = e.response.get("Error", {}).get("Code", "")
         if error_code == "NoSuchKey":
             return None  # File doesn't exist
-        print(f"[md_reader] R2 get_object error for {filename}: {e}")
+        logger.exception("R2 get_object error for %s", filename)
         return None
 
 
@@ -104,13 +112,13 @@ def read_policy_file(filename: str) -> str:
     The Policy Agent uses this to fetch a document's content before answering.
     """
     content = get_file_content(filename)
-    
+
     if content is None:
         md_files = get_all_md_files()
         available = md_files if md_files else "none"
         return f"File '{filename}' not found in bucket. Available files: {available}"
 
-    print(f"[md_reader] Loaded: {filename} from R2 ({len(content)} characters)")
+    logger.info("Loaded: %s from R2 (%d characters)", filename, len(content))
     return content
 
 
@@ -137,7 +145,7 @@ def search_policies(keyword: str) -> str:
             continue
 
         lines = content.split("\n")
-        
+
         # Find lines containing the keyword and show some context around them
         for i, line in enumerate(lines):
             if keyword_lower in line.lower():
@@ -164,7 +172,7 @@ def get_policy_summary(filename: str) -> str:
     Useful when the agent needs a quick summary without loading the full document.
     """
     content = get_file_content(filename)
-    
+
     if content is None:
         return f"File '{filename}' not found in the bucket."
 
@@ -198,8 +206,7 @@ def get_policy_summary(filename: str) -> str:
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    print("Starting MD Reader MCP server (R2 Cloud Storage version)...")
-    print(f"  R2 Bucket: {BUCKET_NAME}")
-    print("\nAvailable tools: list_policy_files, read_policy_file,")
-    print("                 search_policies, get_policy_summary\n")
+    logger.info("Starting MD Reader MCP server (R2 Cloud Storage version)...")
+    logger.info("R2 Bucket: %s", BUCKET_NAME)
+    logger.info("Available tools: list_policy_files, read_policy_file, search_policies, get_policy_summary")
     mcp.run(transport="stdio")

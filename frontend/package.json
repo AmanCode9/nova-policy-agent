@@ -1,11 +1,9 @@
 {
   "name": "policy-agent-ui",
   "version": "1.0.0",
-  "description": "A2UI frontend for Nova Technologies Policy Agent",
+  "description": "React frontend for Nova Technologies Policy Agent",
   "private": true,
   "dependencies": {
-    "@copilotkit/react-core": "^1.3.0",
-    "@copilotkit/react-ui": "^1.3.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-scripts": "5.0.1"

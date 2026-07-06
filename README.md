@@ -20,38 +20,44 @@ Company policy documents are long, scattered across PDFs, and rarely read end-to
 ## Architecture
 
 ```
-┌─────────────┐      HTTP       ┌──────────────────────┐
-│   React UI   │ ───────────────▶│   FastAPI Backend     │
-│  (frontend)  │◀─────────────── │ (copilotkit_endpoint) │
-└─────────────┘                  └───────────┬───────────┘
-                                              │ invokes
-                                              ▼
-                                  ┌───────────────────────┐
-                                  │   LangGraph Pipeline    │
-                                  │                         │
-                                  │  cache_check             │
-                                  │      │                   │
-                                  │      ├─ new PDFs? ─┐      │
-                                  │      │             ▼      │
-                                  │      │      pdf_extractor  │
-                                  │      │             │       │
-                                  │      ▼◀────────────┘       │
-                                  │  orchestrator (classify)   │
-                                  │      │                     │
-                                  │      ├─ policy → policy_agent│
-                                  │      └─ general → general_agent│
-                                  └───────────┬─────────────────┘
-                                              │
-                                              ▼
-                                  ┌───────────────────────┐
-                                  │  Cloudflare R2 (S3 API) │
-                                  │  PDFs · Markdown · cache│
-                                  └───────────────────────┘
+                    ┌─────────────────┐
+                    │     React UI     │
+                    │    (frontend)    │
+                    └────────┬─────────┘
+                             │ HTTP POST /api/query
+                             ▼
+                    ┌─────────────────────┐
+                    │   FastAPI Backend    │
+                    │ (copilotkit_endpoint)│
+                    └────────┬─────────────┘
+                             │ invokes directly
+                             ▼
+                ┌────────────────────────────┐
+                │      LangGraph Pipeline      │
+                │                              │
+                │        cache_check            │
+                │            │                   │
+                │   ┌────────┴────────┐           │
+                │   │ new PDFs?       │           │
+                │   ▼                 ▼           │
+                │ pdf_extractor    orchestrator    │
+                │   │                 │            │
+                │   └────────►────────┤ classify   │
+                │                     │             │
+                │           ┌─────────┴─────────┐   │
+                │           ▼                   ▼   │
+                │     policy_agent      general_agent│
+                └───────────┬───────────────┬────────┘
+                            │               │
+                            ▼               ▼
+                  ┌──────────────────┐  ┌──────────────┐
+                  │ Cloudflare R2     │  │ Google Gemini │
+                  │ PDFs · Markdown   │  │(gemini-2.0-   │
+                  │ · cache           │  │ flash)        │
+                  └──────────────────┘  └──────────────┘
+``` 
 
-                 Powered end-to-end by Google Gemini (gemini-2.0-flash)
-```
-
-**Flow:** a user asks a question in the React UI → the FastAPI backend passes it to a LangGraph pipeline → the pipeline checks whether new policy PDFs need processing, classifies the query, retrieves the relevant policy markdown from cloud storage, and generates a grounded answer with Gemini.
+**Flow:** a user asks a question in the React UI → the FastAPI backend runs it directly through an in-process LangGraph pipeline → the pipeline checks whether new policy PDFs need processing, classifies the query, retrieves the relevant policy markdown from cloud storage, and generates a grounded answer with Gemini.
 
 ---
 
@@ -84,17 +90,29 @@ Company policy documents are long, scattered across PDFs, and rarely read end-to
 ## Project structure
 
 ```
-├── nodes.py                 # LangGraph node functions (cache check, extraction, routing, answering)
-├── graph.py                 # Builds and compiles the LangGraph pipeline
-├── state.py                 # Shared pipeline state schema
-├── md_reader.py              # MCP tool server — read/search policy markdown in R2
-├── cache_checker.py          # MCP tool server — track which PDFs are processed
-├── copilotkit_endpoint.py    # FastAPI backend — file upload + query API for the frontend
-├── App.js / App.css / index.js  # React chat interface
-├── eval_dataset.py           # Test cases + retrieval-context loader for evaluation
-├── test_policy_agent.py      # DeepEval suite — faithfulness, relevancy, correctness
-├── test_mcp_tools.py         # Unit tests for MCP tool servers
-├── requirements.txt          # Python dependencies
+POLICY_AGENT_PROJECT/
+├── backend/
+│   └── copilotkit_endpoint.py    # FastAPI backend — file upload + query API for the frontend
+├── frontend/
+│   ├── public/
+│   ├── src/
+│   │   ├── App.js                # React chat interface
+│   │   ├── App.css
+│   │   └── index.js
+│   ├── package.json
+│   └── package-lock.json
+├── langgraph_pipeline/
+│   ├── graph.py                   # Builds and compiles the LangGraph pipeline
+│   ├── nodes.py                   # Node functions (cache check, extraction, routing, answering)
+│   └── state.py                   # Shared pipeline state schema
+├── mcp_tools/
+│   ├── md_reader.py                # MCP tool server — read/search policy markdown in R2
+│   └── cache_checker.py            # MCP tool server — track which PDFs are processed
+├── evaluation/
+│   ├── eval_dataset.py              # Test cases + retrieval-context loader for evaluation
+│   ├── test_policy_agent.py         # DeepEval suite — faithfulness, relevancy, correctness
+│   └── test_mcp_tools.py            # Unit tests for MCP tool servers
+├── requirements.txt
 └── README.md
 ```
 
@@ -115,11 +133,13 @@ Company policy documents are long, scattered across PDFs, and rarely read end-to
 git clone <repo-url>
 cd nova-policy-agent
 
-# Python dependencies
+# Python dependencies (from the project root)
 pip install -r requirements.txt
 
 # Frontend dependencies
+cd frontend
 npm install
+cd ..
 ```
 
 ### 2. Configure environment variables
@@ -139,13 +159,15 @@ R2_BUCKET_NAME=nova-policy-bucket
 ### 3. Run the backend
 
 ```bash
+cd backend
 python copilotkit_endpoint.py
 ```
-Starts the API server at `http://localhost:8001`.
+Starts the API server at `http://localhost:8001`. The LangGraph pipeline is built in-process on startup — no separate agent server needs to be running.
 
 ### 4. Run the frontend
 
 ```bash
+cd frontend
 npm start
 ```
 Opens the chat UI at `http://localhost:3000`.
@@ -162,11 +184,12 @@ Upload a policy PDF through the UI, or drop one directly into your R2 bucket, th
 
 ## Evaluation
 
-Answer quality is measured automatically rather than eyeballed. Run the full evaluation suite with:
+Answer quality is measured automatically rather than eyeballed. Run the full evaluation suite from the `evaluation/` folder:
 
 ```bash
-pytest test_mcp_tools.py -v       # MCP tool correctness (unit-level)
-deepeval test run test_policy_agent.py   # End-to-end answer quality (LLM-as-judge)
+cd evaluation
+pytest test_mcp_tools.py -v              
+deepeval test run test_policy_agent.py   
 ```
 
 Metrics tracked per query:
@@ -178,10 +201,9 @@ Metrics tracked per query:
 
 ## Roadmap
 
-- [ ] Expand evaluation coverage across all five policy documents
+- [ ] Expand evaluation coverage across all five policy documents (currently 1 of 10 test cases active)
 - [ ] Wire MCP tool servers directly into the LangGraph pipeline (currently validated independently)
 - [ ] Add lightweight API-key auth to backend endpoints
-- [ ] Structured logging in place of `print()` statements
 - [ ] Deploy backend + frontend to a public environment
 
 ---

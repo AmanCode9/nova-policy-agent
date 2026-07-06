@@ -2,9 +2,10 @@
 copilotkit_endpoint.py  —  Backend Server with R2 Cloud Storage Integration
 
 Plain FastAPI backend. No CopilotKit SDK needed.
-Receives questions from the React frontend and forwards them to the A2A server.
-Also handles file uploads to Cloudflare R2 and serves PDFs back via API
-so the pipeline no longer depends on local disk storage.
+Receives questions from the React frontend and runs them directly through the
+LangGraph policy Q&A pipeline (no A2A hop). Also handles file uploads to
+Cloudflare R2 and serves PDFs back via API so the pipeline no longer depends
+on local disk storage.
 
 RUN:  python copilotkit_endpoint.py
 """
@@ -12,7 +13,10 @@ RUN:  python copilotkit_endpoint.py
 import os
 import re
 import io
-import requests
+import logging
+import asyncio
+import sys
+
 import uvicorn
 import boto3
 from botocore.exceptions import ClientError
@@ -22,21 +26,45 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
+# ─────────────────────────────────────────────────────────────────────────────
+# LOGGING
+# ─────────────────────────────────────────────────────────────────────────────
+logger = logging.getLogger(__name__)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ENVIRONMENT
+# ─────────────────────────────────────────────────────────────────────────────
 BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
 PROJECT_DIR = os.path.dirname(BASE_DIR)
 load_dotenv(os.path.join(PROJECT_DIR, ".env"))
 
-A2A_SERVER_URL = os.getenv("A2A_SERVER_URL", "http://localhost:8000")
+PIPELINE_DIR = os.path.join(PROJECT_DIR, "langgraph_pipeline")     
+sys.path.insert(0, PIPELINE_DIR)
+
+from graph import build_graph   
+
+FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:3000")
 
 app = FastAPI(title="Policy Agent Backend")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=[FRONTEND_ORIGIN],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LANGGRAPH PIPELINE — built once at startup, reused across every request
+# ─────────────────────────────────────────────────────────────────────────────
+logger.info("Building LangGraph pipeline...")
+graph_app = build_graph()
+logger.info("Pipeline ready.")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CLOUDFLARE R2 S3 CLIENT INITIALIZATION
@@ -49,9 +77,9 @@ s3_client = boto3.client(
     region_name='auto',
 )
 
-BUCKET_NAME          = os.getenv('R2_BUCKET_NAME', 'nova-policy-bucket')
-ALLOWED_EXTENSIONS    = {".pdf", ".zip"}
-MAX_FILE_SIZE_MB       = 20
+BUCKET_NAME        = os.getenv('R2_BUCKET_NAME', 'nova-policy-bucket')
+ALLOWED_EXTENSIONS = {".pdf", ".zip"}
+MAX_FILE_SIZE_MB   = 20
 
 
 class QueryRequest(BaseModel):
@@ -65,8 +93,8 @@ class QueryRequest(BaseModel):
 # filename (e.g. "../../config.json") cannot affect the object key.
 # ─────────────────────────────────────────────────────────────────────────────
 def sanitize_filename(filename: str) -> str:
-    filename = os.path.basename(filename)               # strip any path parts
-    filename = re.sub(r'[^a-zA-Z0-9._-]', '_', filename) # allow only safe chars
+    filename = os.path.basename(filename)                # strip any path parts
+    filename = re.sub(r'[^a-zA-Z0-9._-]', '_', filename)  # allow only safe chars
     return filename
 
 
@@ -96,9 +124,11 @@ async def upload_document(file: UploadFile = File(...)):
             }
 
         safe_filename = sanitize_filename(file.filename)
-        file_obj       = io.BytesIO(contents)
+        file_obj      = io.BytesIO(contents)
 
         s3_client.upload_fileobj(file_obj, BUCKET_NAME, safe_filename)
+
+        logger.info("Uploaded %s to bucket %s", safe_filename, BUCKET_NAME)
 
         return {
             "status": "success",
@@ -107,6 +137,7 @@ async def upload_document(file: UploadFile = File(...)):
         }
 
     except Exception as e:
+        logger.exception("Upload failed")
         return {"status": "error", "message": str(e)}
 
 
@@ -132,6 +163,7 @@ async def list_pdfs():
         return {"status": "success", "pdfs": pdf_files, "count": len(pdf_files)}
 
     except ClientError as e:
+        logger.exception("Failed to list PDFs from bucket")
         return {"status": "error", "message": str(e)}
 
 
@@ -161,32 +193,43 @@ async def get_pdf(filename: str):
         error_code = e.response.get("Error", {}).get("Code", "")
         if error_code == "NoSuchKey":
             raise HTTPException(status_code=404, detail=f"PDF '{filename}' not found in bucket.")
+        logger.exception("Failed to fetch PDF %s from bucket", filename)
         raise HTTPException(status_code=500, detail=str(e))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# EXISTING ENDPOINTS
+# ENDPOINT 4 — QUERY THE POLICY AGENT
+#
+# Runs the user's question directly through the in-process LangGraph
+# pipeline (no A2A/HTTP hop). graph_app.invoke() is a blocking, synchronous
+# call, so it's offloaded to a worker thread via run_in_executor — otherwise
+# a single slow Gemini call would stall the entire async event loop and
+# block every other request the backend is trying to serve.
 # ─────────────────────────────────────────────────────────────────────────────
 @app.post("/api/query")
 async def query(req: QueryRequest):
-    """Forwards user question to the LangGraph A2A server."""
+    """Runs the user's question through the LangGraph pipeline and returns the answer."""
     try:
-        response = requests.post(
-            f"{A2A_SERVER_URL}/a2a",
-            json={
-                "id": "frontend-query",
-                "message": {"role": "user", "content": req.question},
-            },
-            timeout=300,
-        )
-        data = response.json()
-        return {
-            "answer":     data["message"]["content"],
-            "query_type": data.get("metadata", {}).get("query_type", "unknown"),
+        loop = asyncio.get_event_loop()
+
+        initial_state = {
+            "user_query":        req.question,
+            "extraction_needed": "",
+            "extraction_done":   False,
+            "query_type":        "",
+            "final_answer":      "",
+            "error":             None,
         }
-    except requests.exceptions.ConnectionError:
-        return {"answer": "Cannot connect to the A2A server. Is it running on port 8000?", "query_type": "error"}
+
+        result = await loop.run_in_executor(None, graph_app.invoke, initial_state)
+
+        answer     = result.get("final_answer", "I could not generate an answer.")
+        query_type = result.get("query_type", "unknown")
+
+        return {"answer": answer, "query_type": query_type}
+
     except Exception as e:
+        logger.exception("Pipeline execution failed for query: %s", req.question)
         return {"answer": f"Error: {str(e)}", "query_type": "error"}
 
 
@@ -196,9 +239,6 @@ async def health():
 
 
 if __name__ == "__main__":
-    print("\n" + "="*45)
-    print("  Backend → http://localhost:8001")
-    print("  A2A     → " + A2A_SERVER_URL)
-    print("  R2 Bucket → " + BUCKET_NAME)
-    print("="*45 + "\n")
+    logger.info("Backend starting at http://localhost:8001")
+    logger.info("R2 Bucket: %s", BUCKET_NAME)
     uvicorn.run("copilotkit_endpoint:app", host="0.0.0.0", port=8001, reload=True)

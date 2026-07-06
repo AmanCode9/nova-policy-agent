@@ -29,10 +29,18 @@ Run this file to start the MCP server:
 
 import os
 import json
+import logging
 import boto3
 from botocore.exceptions import ClientError
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+logger = logging.getLogger(__name__)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
 
 # ── Path configuration ──────────────────────────────────────────────────────
 BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
@@ -66,8 +74,8 @@ def list_bucket_pdfs() -> list:
         response = s3_client.list_objects_v2(Bucket=BUCKET_NAME)
         contents = response.get("Contents", [])
         return [obj["Key"] for obj in contents if obj["Key"].lower().endswith(".pdf")]
-    except ClientError as e:
-        print(f"[cache_checker] R2 list_objects_v2 error: {e}")
+    except ClientError:
+        logger.exception("R2 list_objects_v2 error")
         return []
 
 
@@ -87,7 +95,7 @@ def load_cache() -> dict:
         if error_code == "NoSuchKey":
             # First time running — no cache object yet in the bucket
             return {"processed_files": []}
-        print(f"[cache_checker] R2 get_object error: {e}")
+        logger.exception("R2 get_object error while loading cache")
         return {"processed_files": []}
 
 
@@ -105,8 +113,8 @@ def save_cache(cache: dict):
             Body=json.dumps(cache, indent=2),
             ContentType="application/json",
         )
-    except ClientError as e:
-        print(f"[cache_checker] R2 put_object error: {e}")
+    except ClientError:
+        logger.exception("R2 put_object error while saving cache")
 
 
 # ── MCP Tool 1: check_cache ──────────────────────────────────────────────────
@@ -131,10 +139,10 @@ def check_cache() -> str:
     new_pdfs = [pdf for pdf in all_pdfs if pdf not in already_processed]
 
     if new_pdfs:
-        print(f"[cache_checker] New PDFs found in bucket that need processing: {new_pdfs}")
+        logger.info("New PDFs found in bucket that need processing: %s", new_pdfs)
         return "yes"
     else:
-        print(f"[cache_checker] All {len(all_pdfs)} PDFs in bucket already processed. Skipping extraction.")
+        logger.info("All %d PDFs in bucket already processed. Skipping extraction.", len(all_pdfs))
         return "no"
 
 
@@ -156,7 +164,7 @@ def mark_as_processed(filename: str) -> str:
     if filename not in cache["processed_files"]:
         cache["processed_files"].append(filename)
         save_cache(cache)
-        print(f"[cache_checker] Marked as processed: {filename}")
+        logger.info("Marked as processed: %s", filename)
         return f"OK: '{filename}' added to cache (saved in bucket)."
     else:
         return f"INFO: '{filename}' was already in the cache."
@@ -201,7 +209,7 @@ def reset_cache() -> str:
         A confirmation message string.
     """
     save_cache({"processed_files": []})
-    print("[cache_checker] Cache (in bucket) has been reset.")
+    logger.info("Cache (in bucket) has been reset.")
     return "Cache cleared in bucket. All PDFs will be reprocessed on the next run."
 
 
@@ -229,9 +237,8 @@ def get_unprocessed_pdfs() -> str:
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    print("Starting Cache Checker MCP server (R2 Cloud Storage version)...")
-    print(f"  R2 Bucket   : {BUCKET_NAME}")
-    print(f"  Cache key   : {CACHE_KEY} (stored inside bucket)")
-    print("\nAvailable tools: check_cache, mark_as_processed, get_cache_status,")
-    print("                  reset_cache, get_unprocessed_pdfs\n")
+    logger.info("Starting Cache Checker MCP server (R2 Cloud Storage version)...")
+    logger.info("R2 Bucket   : %s", BUCKET_NAME)
+    logger.info("Cache key   : %s (stored inside bucket)", CACHE_KEY)
+    logger.info("Available tools: check_cache, mark_as_processed, get_cache_status, reset_cache, get_unprocessed_pdfs")
     mcp.run(transport="stdio")

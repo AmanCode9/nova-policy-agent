@@ -12,17 +12,17 @@ export default function App() {
   ]);
   const [input, setInput]     = useState("");
   const [loading, setLoading] = useState(false);
-  const [uploading, setUploading] = useState(false); // Track file upload state
+  const [uploading, setUploading] = useState(false); 
   
   const bottomRef    = useRef(null);
-  const fileInputRef = useRef(null); // Reference for the hidden file input
+  const fileInputRef = useRef(null); 
 
-  // Auto-scroll to latest message
+  
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, loading, uploading]);
 
-  // ── Chat Send Logic ──
+  
   const send = async (text) => {
     const question = (text || input).trim();
     if (!question || loading) return;
@@ -42,21 +42,20 @@ export default function App() {
     } catch {
       setMessages([...updated, {
         role:    "assistant",
-        content: "⚠️ Cannot reach the server. Make sure both the A2A server and backend are running.",
+        content: "⚠️ Cannot reach the server. Make sure the backend is running.",
       }]);
     } finally {
       setLoading(false);
     }
   };
 
-  // ── File Upload Logic ──
+  
   const handleFileUpload = async (event) => {
     const file = event.target.files[0];
     if (!file) return;
 
     setUploading(true);
     
-    // Create FormData payload
     const formData = new FormData();
     formData.append("file", file);
 
@@ -110,7 +109,7 @@ export default function App() {
           <div className="title">Nova Technologies</div>
           <div className="subtitle">Company Policy Assistant</div>
         </div>
-        <div className="badge">Gemini · LangGraph · A2A</div>
+        <div className="badge">Gemini · LangGraph</div>
       </div>
 
       {/* ── Quick questions ── */}
@@ -193,7 +192,7 @@ export default function App() {
           
           <button onClick={() => send()} disabled={loading || uploading || !input.trim()}>↑</button>
         </div>
-        <div className="powered">Powered by CopilotKit · Gemini · LangGraph</div>
+        <div className="powered">Powered by Gemini · LangGraph</div>
       </div>
     </div>
   );
