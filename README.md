@@ -197,17 +197,6 @@ Metrics tracked per query:
 - **Contextual relevancy** — was the right document actually retrieved?
 - **Answer correctness / policy accuracy** — is the final answer factually right?
 
----
-
-## Roadmap
-
-- [ ] Expand evaluation coverage across all five policy documents (currently 1 of 10 test cases active)
-- [ ] Wire MCP tool servers directly into the LangGraph pipeline (currently validated independently)
-- [ ] Add lightweight API-key auth to backend endpoints
-- [ ] Deploy backend + frontend to a public environment
-
----
-
 ## Author
 
 Built by **Aman Patra**, B.Tech Computer Science, KIIT Bhubaneswar — as part of a Generative AI internship at TCG Digital.
